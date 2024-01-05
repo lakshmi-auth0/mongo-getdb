@@ -1,6 +1,7 @@
 const MongoClient     = require("mongodb").MongoClient;
 const async           = require('async');
 const configs = {};
+const Db = require("mongodb").Db;
 
 const MemoizedConnect = async.memoize(function (alias, callback) {
   if (!(alias in configs)) {
@@ -10,6 +11,49 @@ const MemoizedConnect = async.memoize(function (alias, callback) {
 });
 
 const isMongoUrl = (str) => str.indexOf('mongodb://') === 0 || str.indexOf('mongodb+srv://') === 0;
+
+function applyOptions(
+  object,
+  methodName,
+  optionArgIndex,
+  option,
+  value
+) {
+  const originalFunction = object[methodName].bind(object);
+  object[methodName] = function () {
+    const options = arguments[optionArgIndex] || {};
+    options[option] = value;
+    return originalFunction.apply(this, arguments);
+  }.bind(object);
+};
+
+
+function extendDBForTimeout(db) {
+  Db.prototype.getCollectionWithTimeout = function (collectionName) {
+    const modifiedCollection =  db.collection(
+      collectionName
+    );
+    ['find', 'findOne', 'insertOne', 'findOneAndDelete'].forEach(
+      (methodName) => {
+        applyOptions(
+          modifiedCollection,
+          methodName,
+          1,
+          'maxTimeMS',
+          '5000'
+        );
+      }
+    );
+    applyOptions(
+      modifiedCollection,
+      'findOneAndUpdate',
+      2,
+      'maxTimeMS',
+      '5000'
+    );
+    return modifiedCollection;
+  }
+}
 
 const getDb = module.exports = function(alias, callback) {
   if ( !(alias in configs) && typeof alias == 'string' && isMongoUrl(alias) ) {
@@ -35,9 +79,11 @@ const getDb = module.exports = function(alias, callback) {
         console.error('Error connecting to the db, exiting: \n', err);
         return process.exit(1);
       } else {
+        extendDBForTimeout(db);
         return callback(db);
       }
     } else {
+      extendDBForTimeout(db);
       callback(err, db);
     }
   };
